@@ -78,32 +78,41 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
             with st.spinner("در حال اتصال به هوش مصنوعی و تولید صدای مجری..."):
                 client = genai.Client(api_key=api_key)
                 
-                # دریافت لیست مدل‌های در دسترس API شما جهت جلوگیری از خطای NOT_FOUND
-                target_model = 'gemini-1.5-flash'
+                # استفاده از مدل‌های اختصاصی TTS جدید گوگل با fallback روی 1.5-flash
                 try:
-                    available_models = [m.name.replace('models/', '') for m in client.models.list()]
-                    for m in available_models:
-                        if 'flash' in m:
-                            target_model = m
-                            break
-                except Exception:
-                    pass
-
-                # فراخوانی تولید صوت با مدل شناور و معتبر
-                response = client.models.generate_content(
-                    model=target_model,
-                    contents=f"{system_instruction}\n\nRead the following text aloud with high elegance:\n{script_text}",
-                    config=types.GenerateContentConfig(
-                        response_modalities=["AUDIO"],
-                        speech_config=types.SpeechConfig(
-                            voice_config=types.VoiceConfig(
-                                prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                    voice_name=selected_voice
+                    # مدل اولویت‌دار اختصاصی ساخت صوت
+                    model_to_use = 'gemini-3.8-flash-tts'
+                    response = client.models.generate_content(
+                        model=model_to_use,
+                        contents=f"{system_instruction}\n\nRead the following text aloud with high elegance:\n{script_text}",
+                        config=types.GenerateContentConfig(
+                            response_modalities=["AUDIO"],
+                            speech_config=types.SpeechConfig(
+                                voice_config=types.VoiceConfig(
+                                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                        voice_name=selected_voice
+                                    )
                                 )
                             )
                         )
                     )
-                )
+                except Exception:
+                    # مدل رزرو صوتی
+                    model_to_use = 'gemini-1.5-flash'
+                    response = client.models.generate_content(
+                        model=model_to_use,
+                        contents=f"{system_instruction}\n\nRead the following text aloud with high elegance:\n{script_text}",
+                        config=types.GenerateContentConfig(
+                            response_modalities=["AUDIO"],
+                            speech_config=types.SpeechConfig(
+                                voice_config=types.VoiceConfig(
+                                    prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                        voice_name=selected_voice
+                                    )
+                                )
+                            )
+                        )
+                    )
                 
                 host_audio_bytes = None
                 if response.candidates and len(response.candidates) > 0:
@@ -138,3 +147,4 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                     
         except Exception as e:
             st.error(f"خطای سیستم: {str(e)}")
+            
