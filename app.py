@@ -2,224 +2,256 @@ import io
 import os
 import re
 import wave
+
 import numpy as np
 import streamlit as st
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
-# لیست مدل‌های TTS به ترتیب اولویت فراخوانی
+# ---------------------------------------------------------------------------
+# تنظیمات
+# ---------------------------------------------------------------------------
+# توصیه: این مقدار را خالی بگذارید و کلید را در Secrets ذخیره کنید.
+HARDCODED_API_KEY = ""
+
 TTS_MODELS = [
     "gemini-3.8-flash-tts",
     "gemini-3.1-flash-tts-preview",
     "gemini-2.5-flash-preview-tts",
-    "gemini-2.5-pro-preview-tts",
 ]
-
-VOICES = ["Fenrir", "Kore", "Charon", "Puck", "Orus", "Zephyr", "Leda", "Aoede"]
-GEMINI_DEFAULT_RATE = 24000  # خروجی PCM جمینای ۲۴ کیلوهرتز، ۱۶ بیت مونو است
+VOICES = ["Fenrir", "Kore", "Puck", "Charon", "Aoede", "Zephyr"]
 SILENCE_SECONDS = 1.0
+DEFAULT_GEMINI_RATE = 24000  # خروجی TTS جمینی: PCM 16 بیتی مونو
 
-st.set_page_config(page_title="تیزر رادیویی فارسی", page_icon="🎙️", layout="centered")
 
-st.markdown(
-    """
-    <style>
-    textarea { direction: rtl; text-align: right; font-size: 1.05rem; }
-    .stMarkdown, h1, h2, h3 { direction: rtl; text-align: right; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-def get_api_key(sidebar_key: str) -> str:
-    if sidebar_key.strip():
-        return sidebar_key.strip()
+def get_api_key():
+    """اولویت: کلید مستقیم ← st.secrets ← متغیرهای محیطی."""
+    if HARDCODED_API_KEY and HARDCODED_API_KEY.strip():
+        return HARDCODED_API_KEY.strip()
     try:
-        if "GEMINI_API_KEY" in st.secrets:
-            return st.secrets["GEMINI_API_KEY"]
+        key = st.secrets["GEMINI_API_KEY"]
+        if key:
+            return str(key).strip()
     except Exception:
         pass
-    return os.environ.get("GEMINI_API_KEY", "")
+    return (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GOOGLE_API_KEY")
+        or ""
+    ).strip()
 
-def _parse_rate(mime_type: str) -> int:
-    m = re.search(r"rate=(\d+)", mime_type or "")
-    return int(m.group(1)) if m else GEMINI_DEFAULT_RATE
 
-def _extract_audio(response):
-    """اولین inline_data صوتی را برمی‌گرداند: (bytes, mime_type)"""
-    for cand in getattr(response, "candidates", None) or []:
-        content = getattr(cand, "content", None)
-        for part in (getattr(content, "parts", None) or []):
-            inline = getattr(part, "inline_data", None)
-            if inline and inline.data:
-                return inline.data, (inline.mime_type or "")
-    return None, ""
-
-def _pcm_to_wav_bytes(pcm: bytes, rate: int, channels: int = 1, width: int = 2) -> bytes:
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(width)
-        wf.setframerate(rate)
-        wf.writeframes(pcm)
-    return buf.getvalue()
-
-def generate_announcer_wav(api_key: str, text: str, voice: str, models: list):
-    """تولید صدای مجری فقط با متن فارسی بدون دستور انگلیسی"""
+# ---------------------------------------------------------------------------
+# تولید صدا با Gemini
+# ---------------------------------------------------------------------------
+def generate_tts(api_key, text, voice_name):
+    """برمی‌گرداند: (pcm_bytes, sample_rate, model_used)"""
     client = genai.Client(api_key=api_key)
     config = types.GenerateContentConfig(
         response_modalities=["AUDIO"],
         speech_config=types.SpeechConfig(
             voice_config=types.VoiceConfig(
-                prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)
+                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                    voice_name=voice_name
+                )
             )
         ),
     )
-    errors = []
-    for model in models:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model, contents=text, config=config
-                )
-            except Exception as e:
-                msg = str(e)
-                errors.append(f"{model}: {msg[:200]}")
-                low = msg.lower()
-                if any(k in low for k in ("api key", "api_key", "permission", "401", "403")):
-                    raise RuntimeError(f"مشکل کلید API یا دسترسی:\n{msg}") from e
-                break
 
-            data, mime = _extract_audio(response)
-            if not data:
-                errors.append(f"{model}: پاسخی حاوی داده صوتی نداشت (تلاش {attempt + 1})")
+    failures = []
+    for model in TTS_MODELS:
+        try:
+            # contents فقط متن فارسی کاربر است، بدون هیچ پرامپت اضافه
+            response = client.models.generate_content(
+                model=model, contents=text, config=config
+            )
+            part = response.candidates[0].content.parts[0]
+            inline = part.inline_data
+            if inline is None or not inline.data:
+                failures.append(f"{model}: پاسخ صوتی خالی بود")
                 continue
 
-            if data[:4] == b"RIFF":
-                return data, model
-            return _pcm_to_wav_bytes(data, rate=_parse_rate(mime)), model
+            rate = DEFAULT_GEMINI_RATE
+            mime = getattr(inline, "mime_type", "") or ""
+            m = re.search(r"rate=(\d+)", mime)
+            if m:
+                rate = int(m.group(1))
+            return inline.data, rate, model
 
-    raise RuntimeError("تولید صدا ناموفق بود:\n" + "\n".join(errors))
+        except errors.APIError as e:
+            code = getattr(e, "code", None)
+            if code == 404:
+                failures.append(f"{model}: 404 (مدل یافت نشد)")
+            else:
+                failures.append(f"{model}: خطای {code} - {e}")
+            continue
+        except (IndexError, AttributeError, TypeError) as e:
+            failures.append(f"{model}: پاسخ نامعتبر ({e})")
+            continue
 
-def _bytes_to_float(frames: bytes, width: int) -> np.ndarray:
-    if width == 1:
-        return (np.frombuffer(frames, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
-    if width == 2:
-        return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
-    if width == 3:
-        raw = np.frombuffer(frames, dtype=np.uint8).astype(np.int32).reshape(-1, 3)
-        v = raw[:, 0] | (raw[:, 1] << 8) | (raw[:, 2] << 16)
-        v = np.where(v & 0x800000, v - 0x1000000, v)
-        return v.astype(np.float32) / 8388608.0
-    if width == 4:
-        return np.frombuffer(frames, dtype="<i4").astype(np.float32) / 2147483648.0
-    raise ValueError(f"عمق بیت پشتیبانی‌نشده: {width * 8}-bit")
+    raise RuntimeError(
+        "هیچ‌کدام از مدل‌ها پاسخ ندادند:\n" + "\n".join(failures)
+    )
 
-def read_wav(data: bytes):
+
+# ---------------------------------------------------------------------------
+# پردازش صوت با wave و numpy (بدون audioop)
+# ---------------------------------------------------------------------------
+def pcm16_to_float(pcm_bytes, channels=1):
+    n = len(pcm_bytes) // 2
+    data = np.frombuffer(pcm_bytes[: n * 2], dtype="<i2").astype(np.float32)
+    usable = (len(data) // channels) * channels
+    return data[:usable].reshape(-1, channels)
+
+
+def read_wav_as_float(file_bytes):
+    """خواندن WAV با هر عمق بیت PCM و تبدیل به float32 با شکل (n, ch)
+    در بازه ۱۶ بیتی. برمی‌گرداند: (data, rate, channels)"""
     try:
-        with wave.open(io.BytesIO(data), "rb") as wf:
-            ch, width, rate = wf.getnchannels(), wf.getsampwidth(), wf.getframerate()
-            frames = wf.readframes(wf.getnframes())
-    except (wave.Error, EOFError) as e:
-        raise ValueError(f"فایل WAV خوانده نشد. لطفاً WAV استاندارد (PCM) آپلود کنید. جزئیات: {e}") from e
+        with wave.open(io.BytesIO(file_bytes), "rb") as wf:
+            ch = wf.getnchannels()
+            width = wf.getsampwidth()
+            rate = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+    except wave.Error as e:
+        raise ValueError(
+            f"فایل WAV پشتیبانی نمی‌شود (باید PCM باشد، نه Float): {e}"
+        )
 
-    frames = frames[: len(frames) - (len(frames) % (width * ch))]
-    arr = _bytes_to_float(frames, width).reshape(-1, ch)
-    return arr, rate
+    if width == 1:
+        a = np.frombuffer(raw, dtype=np.uint8).astype(np.float32)
+        a = (a - 128.0) * 256.0
+    elif width == 2:
+        a = np.frombuffer(raw, dtype="<i2").astype(np.float32)
+    elif width == 3:
+        b = np.frombuffer(raw[: (len(raw) // 3) * 3], dtype=np.uint8)
+        b = b.reshape(-1, 3).astype(np.int32)
+        v = b[:, 0] | (b[:, 1] << 8) | (b[:, 2] << 16)
+        v = np.where(v & 0x800000, v - 0x1000000, v)
+        a = (v / 256.0).astype(np.float32)
+    elif width == 4:
+        a = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 65536.0
+    else:
+        raise ValueError(f"عمق بیت {width * 8} پشتیبانی نمی‌شود.")
 
-def _match_channels(arr: np.ndarray, target: int) -> np.ndarray:
-    if arr.shape[1] == target:
-        return arr
-    mono = arr.mean(axis=1, keepdims=True)
-    return np.repeat(mono, target, axis=1)
+    usable = (len(a) // ch) * ch
+    return a[:usable].reshape(-1, ch), rate, ch
 
-def _resample(arr: np.ndarray, src: int, dst: int) -> np.ndarray:
-    if src == dst or len(arr) == 0:
-        return arr
-    n_out = int(round(len(arr) * dst / src))
-    x_old = np.linspace(0.0, 1.0, num=len(arr), endpoint=False)
-    x_new = np.linspace(0.0, 1.0, num=n_out, endpoint=False)
-    return np.stack([np.interp(x_new, x_old, arr[:, c]) for c in range(arr.shape[1])], axis=1).astype(np.float32)
 
-def merge_wavs(announcer_wav: bytes, user_wav: bytes, silence_sec: float = SILENCE_SECONDS) -> bytes:
-    ann, ann_rate = read_wav(announcer_wav)
-    usr, usr_rate = read_wav(user_wav)
-    target_rate = usr_rate
-    target_ch = usr.shape[1]
+def resample(x, sr_in, sr_out):
+    """ریسمپل خطی برای هر کانال."""
+    if sr_in == sr_out or len(x) == 0:
+        return x
+    n_out = max(1, int(round(len(x) * sr_out / sr_in)))
+    pos = np.arange(n_out, dtype=np.float64) * (sr_in / sr_out)
+    xp = np.arange(len(x), dtype=np.float64)
+    out = np.empty((n_out, x.shape[1]), dtype=np.float32)
+    for c in range(x.shape[1]):
+        out[:, c] = np.interp(pos, xp, x[:, c])
+    return out
 
-    ann = _resample(_match_channels(ann, target_ch), ann_rate, target_rate)
-    silence = np.zeros((int(target_rate * silence_sec), target_ch), dtype=np.float32)
-    combined = np.concatenate([ann, silence, usr], axis=0)
-    pcm16 = (np.clip(combined, -1.0, 1.0) * 32767.0).astype("<i2")
-    return _pcm_to_wav_bytes(pcm16.tobytes(), rate=target_rate, channels=target_ch, width=2)
 
-# UI اصلی برنامه
-st.title("🎙️ ساخت تیزر صوتی رادیویی")
-st.caption("متن معرفی مجری → صدای Gemini → الصاق به ابتدای دکلمه شما")
+def match_channels(x, target_ch):
+    cur = x.shape[1]
+    if cur == target_ch:
+        return x
+    if cur == 1:
+        return np.repeat(x, target_ch, axis=1)
+    mono = x.mean(axis=1, keepdims=True)
+    return np.repeat(mono, target_ch, axis=1)
 
-with st.sidebar:
-    st.header("تنظیمات")
-    key_input = st.text_input("Gemini API Key", type="password", help="اگر در Secrets تنظیم شده خالی بگذارید.")
-    voice = st.selectbox("صدای مجری", VOICES, index=0)
-    model_choice = st.selectbox("مدل", ["خودکار (با fallback)"] + TTS_MODELS)
-    custom_model = st.text_input("نام مدل دلخواه (اختیاری)")
 
-intro_text = st.text_area(
-    "متن معرفی مجری (فارسی)",
-    height=150,
-    placeholder="مثلاً: شنوندگان عزیز در ادامه برنامه‌ای را می‌شنوید..."
+def to_wav_bytes(data_float, rate, channels):
+    pcm = np.clip(np.rint(data_float), -32768, 32767).astype("<i2")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(pcm.tobytes())
+    return buf.getvalue()
+
+
+def build_final_audio(gemini_pcm, gemini_rate, user_wav_bytes):
+    user_data, user_rate, user_ch = read_wav_as_float(user_wav_bytes)
+
+    intro = pcm16_to_float(gemini_pcm, channels=1)
+    intro = resample(intro, gemini_rate, user_rate)
+    intro = match_channels(intro, user_ch)
+
+    silence = np.zeros(
+        (int(round(SILENCE_SECONDS * user_rate)), user_ch), dtype=np.float32
+    )
+
+    combined = np.concatenate([intro, silence, user_data], axis=0)
+    return to_wav_bytes(combined, user_rate, user_ch), intro, user_rate, user_ch
+
+
+# ---------------------------------------------------------------------------
+# رابط کاربری
+# ---------------------------------------------------------------------------
+st.set_page_config(page_title="تیزر صوتی رادیویی", page_icon="🎙️")
+
+st.markdown(
+    """
+    <style>
+    .stTextArea textarea { direction: rtl; text-align: right; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-uploaded = st.file_uploader("فایل دکلمه (WAV)", type=["wav"])
+st.title("🎙️ تولید تیزر صوتی رادیویی")
+st.caption("متن معرفی مجری را وارد کنید، دکلمه خود را آپلود کنید؛ خروجی نهایی آماده می‌شود.")
 
-if uploaded:
-    st.audio(uploaded.getvalue(), format="audio/wav")
+api_key = get_api_key()
+if not api_key:
+    st.error(
+        "کلید API پیدا نشد. مقدار GEMINI_API_KEY را در بخش Secrets "
+        "برنامه در Streamlit Cloud تنظیم کنید."
+    )
 
-if st.button("🚀 تولید تیزر", type="primary", use_container_width=True):
-    api_key = get_api_key(key_input)
-    text = intro_text.strip()
+voice = st.selectbox("صدای مجری", VOICES, index=0)
+intro_text = st.text_area(
+    "متن معرفی مجری (فارسی)", height=160, placeholder="متن را اینجا بنویسید..."
+)
+uploaded = st.file_uploader("فایل صوتی دکلمه (WAV)", type=["wav"])
 
-    if not api_key:
-        st.error("کلید API وارد نشده است.")
-    elif not text:
-        st.error("متن مجری را وارد کنید.")
-    elif not uploaded:
-        st.error("فایل WAV دکلمه را آپلود کنید.")
+if st.button("🚀 تولید تیزر", type="primary", disabled=not api_key):
+    if not intro_text.strip():
+        st.warning("لطفاً متن معرفی را وارد کنید.")
+    elif uploaded is None:
+        st.warning("لطفاً فایل WAV دکلمه را آپلود کنید.")
     else:
-        if custom_model.strip():
-            models = [custom_model.strip()]
-        elif model_choice.startswith("خودکار"):
-            models = TTS_MODELS
-        else:
-            models = [model_choice]
-
         try:
             with st.spinner("در حال تولید صدای مجری..."):
-                ann_wav, used_model = generate_announcer_wav(api_key, text, voice, models)
-
+                pcm, rate, used_model = generate_tts(
+                    api_key, intro_text.strip(), voice
+                )
             with st.spinner("در حال ترکیب فایل‌ها..."):
-                final_wav = merge_wavs(ann_wav, uploaded.getvalue())
-
+                final_wav, _, out_rate, out_ch = build_final_audio(
+                    pcm, rate, uploaded.getvalue()
+                )
             st.session_state["result"] = {
-                "announcer": ann_wav,
-                "final": final_wav,
+                "wav": final_wav,
                 "model": used_model,
+                "rate": out_rate,
+                "channels": out_ch,
             }
         except Exception as e:
             st.session_state.pop("result", None)
-            st.error(str(e))
+            st.error(f"خطا: {e}")
 
 result = st.session_state.get("result")
 if result:
-    st.success(f"تیزر آماده شد! (مدل: {result['model']})")
-    st.subheader("پیش‌نمایش نهایی")
-    st.audio(result["final"], format="audio/wav")
-    st.download_button(
-        "⬇️ دانلود تیزر (WAV)",
-        data=result["final"],
-        file_name="teaser.wav",
-        mime="audio/wav",
-        use_container_width=True,
+    st.success(
+        f"آماده شد ✅ (مدل: {result['model']} | {result['rate']} Hz | "
+        f"{result['channels']} کانال)"
     )
-    with st.expander("فقط صدای مجری"):
-        st.audio(result["announcer"], format="audio/wav")
+    st.audio(result["wav"], format="audio/wav")
+    st.download_button(
+        "⬇️ دانلود فایل نهایی (WAV)",
+        data=result["wav"],
+        file_name="radio_teaser.wav",
+        mime="audio/wav",
+    )
