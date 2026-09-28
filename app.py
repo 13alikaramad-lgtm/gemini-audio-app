@@ -4,13 +4,13 @@ from google.genai import types
 import wave
 import io
 
-# تنظیمات صفحه
+# تنظیمات اولیه صفحه
 st.set_page_config(page_title="استودیوی گویندگی فاخر", page_icon="🎙️", layout="centered")
 
 st.title("🎙️ استودیوی گویندگی و ساخت تیزر رادیویی")
 st.caption("تولید صدای مجری با هوش مصنوعی Gemini و ترکیب یکپارچه با دکلمه اختصاصی")
 
-# نوار تنظیمات
+# نوار کناری تنظیمات
 with st.sidebar:
     st.header("⚙️ تنظیمات API و گویندگان")
     api_key = st.text_input("کلید API گوگل (Gemini API Key):", type="password")
@@ -18,11 +18,12 @@ with st.sidebar:
     selected_voice = st.selectbox(
         "صدای مجری (Voice):",
         ["Fenrir", "Puck", "Kore", "Aoede", "Charon"],
-        index=0
+        index=0,
+        help="صدای Fenrir باوقار و بم است؛ صدای Puck انرژی بیشتری دارد."
     )
     
     st.markdown("---")
-    st.markdown("💡 کلید API را از [Google AI Studio](https://aistudio.google.com/) دریافت کنید.")
+    st.markdown("💡 **راهنما:** کلید API خود را از [Google AI Studio](https://aistudio.google.com/) دریافت کنید.")
 
 # بخش اول: متن معرفی
 st.subheader("۱. متن معرفی مجری")
@@ -42,6 +43,9 @@ system_instruction = st.text_input(
 )
 
 def combine_wav_streams(host_bytes, user_bytes):
+    """
+    ترکیب مستقیم دو فایل WAV با ماژول استاندارد wave پایتون
+    """
     try:
         host_wav = wave.open(io.BytesIO(host_bytes), 'rb')
         user_wav = wave.open(io.BytesIO(user_bytes), 'rb')
@@ -51,7 +55,7 @@ def combine_wav_streams(host_bytes, user_bytes):
         host_frames = host_wav.readframes(host_wav.getnframes())
         user_frames = user_wav.readframes(user_wav.getnframes())
         
-        # سکوت ۱ ثانیه‌ای بین صداها
+        # ۱ ثانیه سکوت بین معرفی مجری و آغاز دکلمه
         silence_frames = b'\x00' * (params.framerate * params.nchannels * params.sampwidth)
         
         combined_frames = host_frames + silence_frames + user_frames
@@ -67,7 +71,7 @@ def combine_wav_streams(host_bytes, user_bytes):
         st.error(f"خطا در ترکیب فایل صوتی: {str(e)}")
         return None
 
-# اجرای پردازش
+# دکمه اجرای پردازش
 if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
     if not api_key:
         st.error("لطفاً ابتدا کلید API خود را در نوار کناری وارد کنید.")
@@ -78,9 +82,9 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
             with st.spinner("در حال اتصال به هوش مصنوعی و تولید صدای مجری..."):
                 client = genai.Client(api_key=api_key)
                 
-                # استفاده از مدل پایدار و فعال gemini-2.5-flash
+                # فراخوانی مدل جدید gemini-2.8-flash طبق مستندات سیستم
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-2.8-flash',
                     contents=f"{system_instruction}\n\nRead the following text aloud with high elegance:\n{script_text}",
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
@@ -127,4 +131,3 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                     
         except Exception as e:
             st.error(f"خطای سیستم: {str(e)}")
-            
