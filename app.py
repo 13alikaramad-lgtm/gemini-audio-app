@@ -17,8 +17,8 @@ with st.sidebar:
     selected_voice = st.selectbox(
         "صدای مجری (Voice):",
         ["Puck", "Fenrir", "Kore", "Aoede", "Charon"],
-        index=0,
-        help="صدای Puck و Fenrir برای لحن‌های بم و مجری‌گری بسیار مناسب هستند."
+        index=1,
+        help="صدای Fenrir و Puck برای لحن‌های بم و مجری‌گری بسیار مناسب هستند."
     )
     
     st.markdown("---")
@@ -26,7 +26,7 @@ with st.sidebar:
 
 # Main Form
 st.subheader("۱. متن معرفی مجری")
-default_script = "Speaker A: [with deep respect and enthusiasm] اکنون از پدیده نوظهور در حوزه گویندگی و دکلمه اشعار، با ویژگی اجرای فاخر... [short-pause] جناب آقای علی کارآمد دعوت می‌کنیم برای اجرای یک دکلمه فاخر به جایگاه تشریف بیاورند. [softly] بفرمایید، مشتاقانه شنوا هستیم."
+default_script = "اکنون از پدیده نوظهور در حوزه گویندگی و دکلمه اشعار، با ویژگی اجرای فاخر، جناب آقای علی کارآمد دعوت می‌کنیم برای اجرای یک دکلمه فاخر به جایگاه تشریف بیاورند."
 script_text = st.text_area("متن دیالوگ مجری:", value=default_script, height=120)
 
 st.subheader("۲. آپلود فایل صوتی دکلمه (استاد علی کارآمد)")
@@ -68,20 +68,19 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
             with st.spinner("در حال تولید صدای مجری توسط Gemini..."):
                 client = genai.Client(api_key=api_key)
                 
-                # Call Gemini TTS API
+                # Request speech synthesis using tts model or speech config
                 response = client.models.generate_content(
                     model='gemini-2.5-flash',
-                    contents=script_text,
+                    contents=f"{system_instruction}\n\nRead the following text aloud with appropriate tone and emotion:\n{script_text}",
                     config=types.GenerateContentConfig(
-                        response_mime_type="audio/wav",
+                        response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(
                             voice_config=types.VoiceConfig(
                                 prebuilt_voice_config=types.PrebuiltVoiceConfig(
                                     voice_name=selected_voice
                                 )
                             )
-                        ),
-                        system_instruction=system_instruction
+                        )
                     )
                 )
                 
