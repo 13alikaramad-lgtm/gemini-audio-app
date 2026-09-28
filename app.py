@@ -18,12 +18,11 @@ with st.sidebar:
     selected_voice = st.selectbox(
         "صدای مجری (Voice):",
         ["Fenrir", "Puck", "Kore", "Aoede", "Charon"],
-        index=0,
-        help="صدای Fenrir باوقار و بم است؛ صدای Puck انرژی بیشتری دارد."
+        index=0
     )
     
     st.markdown("---")
-    st.markdown("💡 **راهنما:** کلید API خود را از [Google AI Studio](https://aistudio.google.com/) دریافت کنید.")
+    st.markdown("💡 کلید API را از [Google AI Studio](https://aistudio.google.com/) دریافت کنید.")
 
 # بخش اول: متن معرفی
 st.subheader("۱. متن معرفی مجری")
@@ -43,9 +42,6 @@ system_instruction = st.text_input(
 )
 
 def combine_wav_streams(host_bytes, user_bytes):
-    """
-    ترکیب مستقیم دو فایل WAV با ماژول استاندارد wave پایتون
-    """
     try:
         host_wav = wave.open(io.BytesIO(host_bytes), 'rb')
         user_wav = wave.open(io.BytesIO(user_bytes), 'rb')
@@ -55,7 +51,7 @@ def combine_wav_streams(host_bytes, user_bytes):
         host_frames = host_wav.readframes(host_wav.getnframes())
         user_frames = user_wav.readframes(user_wav.getnframes())
         
-        # ۱ ثانیه سکوت بین معرفی مجری و آغاز دکلمه
+        # ۱ ثانیه سکوت بین صداها
         silence_frames = b'\x00' * (params.framerate * params.nchannels * params.sampwidth)
         
         combined_frames = host_frames + silence_frames + user_frames
@@ -82,9 +78,20 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
             with st.spinner("در حال اتصال به هوش مصنوعی و تولید صدای مجری..."):
                 client = genai.Client(api_key=api_key)
                 
-                # فراخوانی مدل جدید gemini-2.8-flash طبق مستندات سیستم
+                # دریافت لیست مدل‌های در دسترس API شما جهت جلوگیری از خطای NOT_FOUND
+                target_model = 'gemini-1.5-flash'
+                try:
+                    available_models = [m.name.replace('models/', '') for m in client.models.list()]
+                    for m in available_models:
+                        if 'flash' in m:
+                            target_model = m
+                            break
+                except Exception:
+                    pass
+
+                # فراخوانی تولید صوت با مدل شناور و معتبر
                 response = client.models.generate_content(
-                    model='gemini-2.8-flash',
+                    model=target_model,
                     contents=f"{system_instruction}\n\nRead the following text aloud with high elegance:\n{script_text}",
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
