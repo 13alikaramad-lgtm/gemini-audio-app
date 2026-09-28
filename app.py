@@ -36,28 +36,28 @@ uploaded_declination = st.file_uploader(
     type=["wav"]
 )
 
-def combine_wav_files(host_bytes, user_bytes):
+def combine_audio_streams(host_bytes, user_bytes):
     """
-    ترکیب و اتصال فایل صوتی مجری و دکلمه آپلود شده
+    ترکیب فایل صوتی تولید شده مجری و فایل دکلمه آپلود شده
     """
     try:
-        # خواندن فایل اول (مجری)
+        # خواندن داده‌های صوتی مجری
         host_wav = wave.open(io.BytesIO(host_bytes), 'rb')
         host_params = host_wav.getparams()
         host_frames = host_wav.readframes(host_wav.getnframes())
         host_wav.close()
 
-        # خواندن فایل دوم (دکلمه)
+        # خواندن داده‌های صوتی دکلمه
         user_wav = wave.open(io.BytesIO(user_bytes), 'rb')
         user_frames = user_wav.readframes(user_wav.getnframes())
         user_wav.close()
 
-        # یک ثانیه سکوت بین دو صدا
+        # ساخت ۱ ثانیه سکوت بین صدای مجری و دکلمه
         silence_duration = 1.0 
-        silence_frames = b'\x00' * int(host_params.framerate * host_params.nchannels * host_params.sampwidth * silence_duration)
+        silence_bytes = b'\x00' * int(host_params.framerate * host_params.nchannels * host_params.sampwidth * silence_duration)
 
-        # ترکیب فریم‌ها
-        combined_frames = host_frames + silence_frames + user_frames
+        # الصاق دو فایل صوتی
+        combined_frames = host_frames + silence_bytes + user_frames
 
         # خروجی فایل WAV نهایی
         output_buffer = io.BytesIO()
@@ -68,7 +68,7 @@ def combine_wav_files(host_bytes, user_bytes):
 
         return output_buffer.getvalue()
     except Exception as e:
-        st.error(f"خطا در ترکیب صوتی: {str(e)}")
+        st.error(f"خطا در الصاق فایل‌های صوتی: {str(e)}")
         return None
 
 # دکمه اجرای پردازش
@@ -82,10 +82,10 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
             with st.spinner("در حال اتصال به هوش مصنوعی و تولید صدای مجری..."):
                 client = genai.Client(api_key=api_key)
                 
-                # فراخوانی مدل با درخواست صوتی مستقیم
+                # فراخوانی مدل صوتی بدون متن انگلیسی اضافه
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
-                    contents=f"Please speak the following Persian text clearly as a professional radio presenter:\n\n{script_text.strip()}",
+                    model='gemini-2.0-flash-exp',
+                    contents=script_text.strip(),
                     config=types.GenerateContentConfig(
                         response_modalities=["AUDIO"],
                         speech_config=types.SpeechConfig(
@@ -110,10 +110,11 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                 if host_audio_bytes:
                     st.success("✨ صدای معرفی مجری با موفقیت تولید شد!")
                     
+                    # اگر فایل دکلمه آپلود شده باشد، آن را متصل می‌کند
                     if uploaded_declination is not None:
-                        with st.spinner("در حال الصاق صدای مجری به دکلمه استاد کارآمد..."):
+                        with st.spinner("در حال الصاق صدای مجری به دکلمه آپلود شده..."):
                             user_audio_bytes = uploaded_declination.read()
-                            final_audio = combine_wav_files(host_audio_bytes, user_audio_bytes)
+                            final_audio = combine_audio_streams(host_audio_bytes, user_audio_bytes)
                             
                             if final_audio:
                                 st.subheader("🎧 تیزر کامل ترکیبی (معرفی مجری + دکلمه):")
@@ -127,10 +128,9 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                     else:
                         st.subheader("🎧 صدای معرفی مجری:")
                         st.audio(host_audio_bytes, format="audio/wav")
-                        st.info("نکته: جهت الصاق دکلمه به انتهای این صدا، فایل WAV دکلمه را در بخش ۲ آپلود کنید.")
+                        st.info("نکته: برای اتصال فایل دکلمه به انتهای این صدا، فایل WAV دکلمه را در بخش ۲ آپلود کنید.")
                 else:
-                    st.error("خطا: پاسخی حاوی داده صوتی دریافت نشد. لطفاً کلید API را بررسی کنید.")
+                    st.error("خطا: پاسخی حاوی داده صوتی دریافت نشد. لطفاً از صحت کلید API مطمئن شوید.")
 
         except Exception as e:
             st.error(f"خطای سیستم: {str(e)}")
-            
