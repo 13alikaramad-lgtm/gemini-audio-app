@@ -1,92 +1,123 @@
-import os
 import streamlit as st
 from google import genai
 from google.genai import types
+import wave
+import io
 
-# تنظیمات اولیه صفحه
-st.set_page_config(
-    page_title="Gemini Audio Studio",
-    page_icon="🎙️",
-    layout="wide"
+st.set_page_config(page_title="استودیوی دکلمه و گویندگی", page_icon="🎙️", layout="centered")
+
+st.title("🎙️ استودیوی گویندگی و ساخت تیزر رادیویی")
+st.caption("تولید صدای مجری با هوش مصنوعی Gemini و ترکیب خودکار با دکلمه شما")
+
+# Sidebar for Configuration
+with st.sidebar:
+    st.header("⚙️ تنظیمات API و گوینده")
+    api_key = st.text_input("کلید API گوگل (Gemini API Key):", type="password")
+    
+    selected_voice = st.selectbox(
+        "صدای مجری (Voice):",
+        ["Puck", "Fenrir", "Kore", "Aoede", "Charon"],
+        index=0,
+        help="صدای Puck و Fenrir برای لحن‌های بم و مجری‌گری بسیار مناسب هستند."
+    )
+    
+    st.markdown("---")
+    st.markdown("💡 **راهنما:** کلید API خود را از [Google AI Studio](https://aistudio.google.com/) دریافت کنید.")
+
+# Main Form
+st.subheader("۱. متن معرفی مجری")
+default_script = "Speaker A: [with deep respect and enthusiasm] اکنون از پدیده نوظهور در حوزه گویندگی و دکلمه اشعار، با ویژگی اجرای فاخر... [short-pause] جناب آقای علی کارآمد دعوت می‌کنیم برای اجرای یک دکلمه فاخر به جایگاه تشریف بیاورند. [softly] بفرمایید، مشتاقانه شنوا هستیم."
+script_text = st.text_area("متن دیالوگ مجری:", value=default_script, height=120)
+
+st.subheader("۲. آپلود فایل صوتی دکلمه (استاد علی کارآمد)")
+uploaded_declination = st.file_uploader("فایل صوتی دکلمه خود را انتخاب کنید (فرمت WAV توصیه می‌شود):", type=["wav", "mp3"])
+
+system_instruction = st.text_input(
+    "توصیف لحن و شخصیت مجری:",
+    value="A professional, authoritative, and warm male radio presenter introducing a distinguished artist with an elegant tone."
 )
 
-st.title("🎙️ استودیو و پرامپت‌ساز هوشمند صدای Gemini")
+def merge_wav_bytes(wav_list):
+    """Combines multiple WAV byte streams into a single WAV byte stream."""
+    data = []
+    params = None
+    for w_bytes in wav_list:
+        try:
+            with wave.open(io.BytesIO(w_bytes), 'rb') as w:
+                if params is None:
+                    params = w.getparams()
+                data.append(w.readframes(w.getnframes()))
+        except Exception as e:
+            st.error(f"خطا در پردازش فایل صوتی: {e}")
+            return None
 
-# نوار کناری تنظیمات
-st.sidebar.header("🔑 تنظیمات اتصال")
-api_key_input = st.sidebar.text_input("کلید API گوگل (GEMINI_API_KEY):", type="password")
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as w:
+        w.setparams(params)
+        for d in data:
+            w.writeframes(d)
+    return output.getvalue()
 
-st.sidebar.divider()
-st.sidebar.header("🎙️ تنظیمات گوینده")
-voice_option = st.sidebar.selectbox(
-    "صدای پیش‌فرض:",
-    options=["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
-    index=0
-)
-
-# تب‌های اصلی
-tab_studio, tab_docs = st.tabs(["⚡ استودیوی ساخت صدا", "📖 راهنما"])
-
-with tab_studio:
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        st.subheader("🛠️ تنظیمات سناریو")
-        speaker_a_desc = st.text_input("توصیف گوینده اول:", value="A confident male with a warm, energetic voice")
-        speaker_b_desc = st.text_input("توصیف گوینده دوم:", value="A calm female with a clear, steady voice")
-        
-        default_script = """Speaker A: |clears-throat| [cheerfully] سلام! نسخه جدید صوتی منتشر شد.
-Speaker B: [warmly] سلام. |mhm| بله، کیفیتش فوق‌العاده‌ست!"""
-        
-        script_input = st.text_area("متن دیالوگ:", value=default_script, height=180)
-        generate_btn = st.button("🚀 تولید و پردازش صوت", type="primary", use_container_width=True)
-
-    with col2:
-        st.subheader("🎧 خروجی صوتی")
-        if generate_btn:
-            api_key = api_key_input or os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                st.error("❌ لطفاً کلید API را وارد کنید.")
-            else:
-                full_prompt = f"""[Speakers Definition]:
-- Speaker A: {speaker_a_desc}
-- Speaker B: {speaker_b_desc}
-
-[Script]:
-{script_input}"""
-
-                with st.spinner("درحال ساخت فایل صوتی..."):
-                    try:
-                        client = genai.Client(api_key=api_key)
-                        response = client.models.generate_content(
-                            model='gemini-2.0-flash',
-                            contents=full_prompt,
-                            config=types.GenerateContentConfig(
-                                response_modalities=["AUDIO"],
-                                speech_config=types.SpeechConfig(
-                                    voice_config=types.VoiceConfig(
-                                        prebuilt_voice_config=types.PrebuiltVoiceConfig(
-                                            voice_name=voice_option
-                                        )
-                                    )
+if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
+    if not api_key:
+        st.error("لطفاً ابتدا کلید API خود را در نوار کناری وارد کنید.")
+    elif not script_text.strip():
+        st.error("لطفاً متن معرفی مجری را وارد کنید.")
+    else:
+        try:
+            with st.spinner("در حال تولید صدای مجری توسط Gemini..."):
+                client = genai.Client(api_key=api_key)
+                
+                # Call Gemini TTS API
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=script_text,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="audio/wav",
+                        speech_config=types.SpeechConfig(
+                            voice_config=types.VoiceConfig(
+                                prebuilt_voice_config=types.PrebuiltVoiceConfig(
+                                    voice_name=selected_voice
                                 )
                             )
-                        )
-
-                        audio_bytes = None
-                        for part in response.candidates[0].content.parts:
-                            if part.inline_data:
-                                audio_bytes = part.inline_data.data
-                                break
-
-                        if audio_bytes:
-                            st.success("✅ فایل صوتی ساخته شد!")
-                            st.audio(audio_bytes, format="audio/wav")
-                            st.download_button("📥 دانلود WAV", data=audio_bytes, file_name="gemini_output.wav", mime="audio/wav")
-                        else:
-                            st.warning("⚠️ داده صوتی یافت نشد.")
-                    except Exception as e:
-                        st.error(f"❌ خطا: {e}")
-
-with tab_docs:
-    st.markdown("### 📚 راهنمای برچسب‌ها\n* احساسی: `[cheerfully]`, `[warmly]`\n* افکت صوتی: `|clears-throat|`, `|sigh|`, `|mhm|`")
+                        ),
+                        system_instruction=system_instruction
+                    )
+                )
+                
+                # Extract host audio
+                host_audio_bytes = None
+                for part in response.candidates[0].content.parts:
+                    if part.inline_data:
+                        host_audio_bytes = part.inline_data.data
+                        break
+                
+                if host_audio_bytes:
+                    st.success("✨ صدای معرفی مجری با موفقیت تولید شد!")
+                    
+                    if uploaded_declination is not None:
+                        with st.spinner("در حال ترکیب صدای مجری با دکلمه شما..."):
+                            user_audio_bytes = uploaded_declination.read()
+                            
+                            # Combine host audio + uploaded declination
+                            combined_audio = merge_wav_bytes([host_audio_bytes, user_audio_bytes])
+                            
+                            if combined_audio:
+                                st.subheader("🎧 فایل نهایی تیزر (معرفی + دکلمه):")
+                                st.audio(combined_audio, format="audio/wav")
+                                st.download_button(
+                                    label="⬇️ دانلود تیزر کامل (WAV)",
+                                    data=combined_audio,
+                                    file_name="teaser_ali_karamad.wav",
+                                    mime="audio/wav"
+                                )
+                    else:
+                        st.subheader("🎧 صدای معرفی مجری:")
+                        st.audio(host_audio_bytes, format="audio/wav")
+                        st.info("نکته: برای اینکه دکلمه شما هم به انتهای این صدا متصل شود، فایل دکلمه را در بخش ۲ آپلود کنید.")
+                else:
+                    st.error("خطا در دریافت خروجی صوتی از Gemini.")
+                    
+        except Exception as e:
+            st.error(f"خطایی رخ داد: {str(e)}")
+            
