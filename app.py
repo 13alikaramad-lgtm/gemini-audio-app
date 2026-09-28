@@ -1,7 +1,7 @@
 import streamlit as st
 from google import genai
 from google.genai import types
-from pydub import AudioSegment
+import wave
 import io
 
 # تنظیمات اولیه صفحه
@@ -33,8 +33,8 @@ script_text = st.text_area("متن دیالوگ مجری:", value=default_script
 # بخش دوم: آپلود فایل صوتی
 st.subheader("۲. آپلود فایل صوتی دکلمه (استاد علی کارآمد)")
 uploaded_declination = st.file_uploader(
-    "فایل صوتی دکلمه خود را انتخاب کنید (فرمت‌های MP3، WAV و M4A پشتیبانی می‌شوند):", 
-    type=["wav", "mp3", "m4a", "ogg"]
+    "فایل صوتی دکلمه خود را انتخاب کنید (فرمت WAV):", 
+    type=["wav"]
 )
 
 system_instruction = st.text_input(
@@ -42,34 +42,33 @@ system_instruction = st.text_input(
     value="A professional, authoritative, and warm male radio presenter introducing a distinguished artist with an elegant tone."
 )
 
-def combine_audio_files(genai_audio_bytes, user_file_bytes):
+def combine_wav_streams(host_bytes, user_bytes):
     """
-    ترکیب و همگام‌سازی فرکانس دو فایل صوتی با استفاده از Pydub
+    ترکیب مستقیم دو فایل WAV با ماژول استاندارد wave
     """
     try:
-        # بارگذاری صدای مجری از Gemini (معمولاً فرمت WAV است)
-        host_segment = AudioSegment.from_file(io.BytesIO(genai_audio_bytes))
+        host_wav = wave.open(io.BytesIO(host_bytes), 'rb')
+        user_wav = wave.open(io.BytesIO(user_bytes), 'rb')
         
-        # بارگذاری صدای آپلودشده کاربر
-        user_segment = AudioSegment.from_file(io.BytesIO(user_file_bytes))
+        params = host_wav.getparams()
         
-        # یکسان‌سازی استاندارد صوتی (نرخ نمونه‌برداری 44.1kHz، کانال استریو)
-        host_segment = host_segment.set_frame_rate(44100).set_channels(2)
-        user_segment = user_segment.set_frame_rate(44100).set_channels(2)
+        host_frames = host_wav.readframes(host_wav.getnframes())
+        user_frames = user_wav.readframes(user_wav.getnframes())
         
-        # ایجاد ۱ ثانیه سکوت بین معرفی مجری و آغاز دکلمه جهت زیبایی اجرا
-        silence = AudioSegment.silent(duration=1000)
+        # سکوت ۱ ثانیه‌ای بین دو صدا
+        silence_frames = b'\x00' * (params.framerate * params.nchannels * params.sampwidth)
         
-        # ترکیب صوتی
-        combined = host_segment + silence + user_segment
+        combined_frames = host_frames + silence_frames + user_frames
         
-        # خروجی به صورت بایتی
-        output_buffer = io.BytesIO()
-        combined.export(output_buffer, format="wav")
-        return output_buffer.getvalue()
+        output = io.BytesIO()
+        out_wav = wave.open(output, 'wb')
+        out_wav.setparams(params)
+        out_wav.writeframes(combined_frames)
+        out_wav.close()
         
+        return output.getvalue()
     except Exception as e:
-        st.error(f"خطا در همگام‌سازی و ترکیب فایل صوتی: {str(e)}")
+        st.error(f"خطا در ترکیب فایل صوتی: {str(e)}")
         return None
 
 # دکمه اجرای پردازش
@@ -83,7 +82,6 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
             with st.spinner("در حال اتصال به هوش مصنوعی و تولید صدای مجری..."):
                 client = genai.Client(api_key=api_key)
                 
-                # فراخوانی استاندارد مدل تولید صوت Gemini
                 response = client.models.generate_content(
                     model='gemini-2.0-flash',
                     contents=f"{system_instruction}\n\nRead the following text aloud with high elegance:\n{script_text}",
@@ -99,7 +97,6 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                     )
                 )
                 
-                # استخراج داده صوتی تولیدشده
                 host_audio_bytes = None
                 if response.candidates and len(response.candidates) > 0:
                     for part in response.candidates[0].content.parts:
@@ -111,11 +108,9 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                     st.success("✨ صدای معرفی مجری با موفقیت تولید شد!")
                     
                     if uploaded_declination is not None:
-                        with st.spinner("در حال یکسان‌سازی فرکانس و ترکیب هوشمند صدای مجری با دکلمه شما..."):
+                        with st.spinner("در حال ترکیب صدای مجری با دکلمه شما..."):
                             user_audio_bytes = uploaded_declination.read()
-                            
-                            # ترکیب استاندارد صوتی
-                            final_audio = combine_audio_files(host_audio_bytes, user_audio_bytes)
+                            final_audio = combine_wav_streams(host_audio_bytes, user_audio_bytes)
                             
                             if final_audio:
                                 st.subheader("🎧 تیزر کامل ترکیبی (معرفی مجری + دکلمه استاد کارآمد):")
@@ -134,8 +129,5 @@ if st.button("🚀 ساخت و ترکیب تیزر کامل", type="primary"):
                     st.error("خطا: پاسخی حاوی داده صوتی از گوگل دریافت نشد.")
                     
         except Exception as e:
-            err_msg = str(e)
-            if "API_KEY_INVALID" in err_msg or "400" in err_msg:
-                st.error("کلید API گوگل نامعتبر است یا دسترسی آن فعال نیست. لطفاً کلید جدیدی دریافت کنید.")
-            else:
-                st.error(f"خطای سیستم: {err_msg}")
+            st.error(f"خطای سیستم: {str(e)}")
+            
